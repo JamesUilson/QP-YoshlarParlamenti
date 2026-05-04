@@ -9,6 +9,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, CallbackQueryHandler, filters, ContextTypes
 )
+from telegram.request import HTTPXRequest
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -19,8 +20,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── SOZLAMALAR ───────────────────────────────────────────────
-BOT_TOKEN = "8784514078:AAHBXnug5MdEmHH_6f5wV5nv_auNzztSDcI"   # @BotFather dan olingan token
-ADMIN_IDS = [2110945697]              # Admin Telegram ID lari (bir nechta bo'lsa: [111, 222])
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"   # @BotFather dan olingan token
+ADMIN_IDS = [123456789]              # Admin Telegram ID lari (bir nechta bo'lsa: [111, 222])
 DB_FILE   = "users.json"            # Ma'lumotlar saqlanadigan fayl
 # ──────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ DISTRICTS = {
 }
 
 # ConversationHandler holatlari
-NAME, DISTRICT, AGE, PHONE = range(4)
+NAME, DISTRICT, AGE, PHONE, POSITION = range(5)
 
 
 # ─── DATABASE ─────────────────────────────────────────────────
@@ -68,8 +69,8 @@ def build_excel() -> BytesIO:
     ws = wb.active
     ws.title = "Foydalanuvchilar"
 
-    headers = ["ID", "FullName", "District", "Age", "Phone", "Role", "InitialRating"]
-    col_widths = [7, 24, 10, 6, 17, 10, 14]
+    headers = ["ID", "FullName", "District", "Age", "Phone", "Role", "InitialRating", "Lavozim"]
+    col_widths = [7, 24, 10, 6, 17, 10, 14, 22]
 
     header_fill = PatternFill("solid", fgColor="1D9E75")
     header_font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
@@ -94,7 +95,8 @@ def build_excel() -> BytesIO:
     for row_i, u in enumerate(users, 2):
         row_data = [
             u.get("ID"), u.get("FullName"), u.get("District"),
-            u.get("Age"), u.get("Phone", ""), u.get("Role"), u.get("InitialRating")
+            u.get("Age"), u.get("Phone", ""), u.get("Role"),
+            u.get("InitialRating"), u.get("Lavozim", "")
         ]
         fill = even_fill if row_i % 2 == 0 else None
         for col, val in enumerate(row_data, 1):
@@ -107,7 +109,7 @@ def build_excel() -> BytesIO:
         ws.row_dimensions[row_i].height = 18
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:G{max(len(users)+1, 2)}"
+    ws.auto_filter.ref = f"A1:H{max(len(users)+1, 2)}"
 
     # ── Sheet 2: Ko'rsatmalar ──
     ws2 = wb.create_sheet("Ko'rsatmalar")
@@ -119,7 +121,8 @@ def build_excel() -> BytesIO:
         ("Age",           "Yosh (18-35)",                  "22"),
         ("Phone",         "Telefon raqami (ixtiyoriy)",    "+998901234567"),
         ("Role",          "user/admin/debugger",           "user"),
-        ("InitialRating", "Boshlang'ich reyting (0-20)",   "0"),
+        ("InitialRating", "Boshlang'ich reyting (0-20)",   "10"),
+        ("Lavozim",       "Foydalanuvchi lavozimi",        "Matbuot kotibi"),
     ]
     for r, row in enumerate(instructions, 1):
         for c, val in enumerate(row, 1):
@@ -231,9 +234,28 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     phone = "" if text in ("–", "-", "yo'q", "skip") else text
     context.user_data["phone"] = phone
 
+    await update.message.reply_text(
+        f"✅ *{phone or '—'}*\n\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "💼 *Lavozimingizni kiriting:*\n"
+        "_Masalan: Matbuot kotibi, Direktor, O'qituvchi..._",
+        parse_mode="Markdown"
+    )
+    return POSITION
+
+
+async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    position = update.message.text.strip()
+    if len(position) < 2:
+        await update.message.reply_text("⚠️ Lavozimni to'liq kiriting (kamida 2 belgi).")
+        return POSITION
+
+    context.user_data["position"] = position
+
     uid = next_id()
     dist_code = context.user_data["district"]
     dist_name = DISTRICTS.get(dist_code, dist_code)
+    phone     = context.user_data["phone"]
 
     record = {
         "ID":            uid,
@@ -243,6 +265,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Phone":         phone,
         "Role":          "user",
         "InitialRating": 10,
+        "Lavozim":       position,
         "TelegramID":    update.effective_user.id,
         "RegisteredAt":  datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
@@ -255,12 +278,13 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"🗺 Hudud: {dist_code} · {dist_name}\n"
         f"🎂 Yosh: {record['Age']}\n"
         f"📱 Telefon: {phone or '—'}\n"
-        f"⭐ Reyting: {record['InitialRating']}\n\n"
+        f"⭐ Reyting: {record['InitialRating']}\n"
+        f"💼 Lavozim: {position}\n\n"
         "Sizning ma'lumotlaringiz saqlandi. Rahmat!",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
-    logger.info(f"Yangi foydalanuvchi: {record['FullName']} (ID: {uid})")
+    logger.info(f"Yangi foydalanuvchi: {record['FullName']} (ID: {uid}), Lavozim: {position}")
     return ConversationHandler.END
 
 
@@ -350,7 +374,26 @@ async def user_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── MAIN ─────────────────────────────────────────────────────
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    # ── Proxy sozlamasi (agar Telegram blok bo'lsa) ──────────────
+    # Proxy ishlatmoqchi bo'lsangiz, quyidagi qatorni yoching va
+    # proxy manzilini kiriting (masalan: "socks5://127.0.0.1:1080"):
+    PROXY_URL = None  # masalan: "http://127.0.0.1:8080"
+    # ─────────────────────────────────────────────────────────────
+
+    request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+        proxy=PROXY_URL,
+    )
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .build()
+    )
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -359,6 +402,7 @@ def main():
             DISTRICT: [CallbackQueryHandler(get_district, pattern=r"^dist_")],
             AGE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_age)],
             PHONE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            POSITION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_position)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
